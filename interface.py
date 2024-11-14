@@ -1,10 +1,11 @@
 
 import os
 import psutil
+import json
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
                              QFileDialog, QProgressBar, QLabel, QTextEdit, QMessageBox, 
                              QListWidget, QListWidgetItem, QStyle, QApplication, QScrollArea,
-                             QSplitter, QTreeView, QFileSystemModel)
+                             QSplitter, QTreeView, QFileSystemModel, QCheckBox, QLineEdit)
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, QSize, QDir
 from PyQt5.QtGui import QIcon, QFont, QColor, QPalette
 from processador import FileProcessor
@@ -14,17 +15,29 @@ class ProcessingThread(QThread):
     update_status = pyqtSignal(str)
     update_file_list = pyqtSignal(str, str)
 
-    def __init__(self, processor, source, destination):
+    def __init__(self, processor, source, destination, use_model, structure_model):
         super().__init__()
         self.processor = processor
         self.source = source
         self.destination = destination
+        self.use_model = use_model
+        self.structure_model = structure_model
+        self.is_cancelled = False
 
     def run(self):
         self.processor.process_files(self.source, self.destination, 
                                      self.update_progress.emit, 
                                      self.update_status.emit,
-                                     self.update_file_list.emit)
+                                     self.update_file_list.emit,
+                                     self.use_model,
+                                     self.structure_model,
+                                     self.check_cancelled)
+
+    def cancel(self):
+        self.is_cancelled = True
+
+    def check_cancelled(self):
+        return self.is_cancelled
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -37,41 +50,52 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 1200, 800)
         self.setStyleSheet('''
             QMainWindow {
-                background-color: #2b2b2b;
-                color: #ffffff;
+                background-color: #f5f5f7;
+                color: #1d1d1f;
             }
             QPushButton {
-                background-color: #3498db;
+                background-color: #0071e3;
                 color: white;
                 border: none;
                 padding: 10px 20px;
                 text-align: center;
                 text-decoration: none;
-                font-size: 16px;
+                font-size: 14px;
                 margin: 4px 2px;
                 border-radius: 8px;
             }
             QPushButton:hover {
-                background-color: #2980b9;
+                background-color: #0077ed;
             }
             QProgressBar {
-                border: 2px solid #3498db;
+                border: 2px solid #0071e3;
                 border-radius: 5px;
                 text-align: center;
-                color: #ffffff;
+                color: #1d1d1f;
             }
             QProgressBar::chunk {
-                background-color: #3498db;
+                background-color: #0071e3;
             }
             QListWidget, QTreeView {
-                background-color: #363636;
-                color: #ffffff;
-                border: 1px solid #3498db;
-                border-radius: 4px;
+                background-color: #ffffff;
+                color: #1d1d1f;
+                border: 1px solid #d2d2d7;
+                border-radius: 8px;
             }
             QLabel {
-                color: #ffffff;
+                color: #1d1d1f;
                 font-size: 14px;
+            }
+            QCheckBox {
+                color: #1d1d1f;
+                font-size: 14px;
+            }
+            QLineEdit {
+                background-color: #ffffff;
+                color: #1d1d1f;
+                border: 1px solid #d2d2d7;
+                border-radius: 4px;
+                padding: 5px;
             }
         ''')
 
@@ -101,10 +125,26 @@ class MainWindow(QMainWindow):
         self.source_button = QPushButton("Selecionar Pasta de Origem", self)
         self.destination_button = QPushButton("Selecionar Pasta de Destino", self)
         self.start_button = QPushButton("Iniciar Processamento", self)
+        self.cancel_button = QPushButton("Cancelar Processamento", self)
+        self.cancel_button.setEnabled(False)
         button_layout.addWidget(self.source_button)
         button_layout.addWidget(self.destination_button)
         button_layout.addWidget(self.start_button)
+        button_layout.addWidget(self.cancel_button)
         right_layout.addLayout(button_layout)
+
+        # Checkbox para usar modelo de estrutura
+        self.use_model_checkbox = QCheckBox("Usar Modelo de Estrutura", self)
+        right_layout.addWidget(self.use_model_checkbox)
+
+        # Campo para inserir o modelo de estrutura
+        self.structure_model_input = QLineEdit(self)
+        self.structure_model_input.setPlaceholderText("Insira o modelo de estrutura (JSON)")
+        right_layout.addWidget(self.structure_model_input)
+
+        # Checkbox para continuar de onde parou
+        self.continue_checkbox = QCheckBox("Continuar de Onde Parou", self)
+        right_layout.addWidget(self.continue_checkbox)
 
         # Barra de progresso e status
         self.progress_bar = QProgressBar(self)
@@ -132,6 +172,7 @@ class MainWindow(QMainWindow):
         self.source_button.clicked.connect(self.select_source)
         self.destination_button.clicked.connect(self.select_destination)
         self.start_button.clicked.connect(self.start_processing)
+        self.cancel_button.clicked.connect(self.cancel_processing)
         self.tree_view.clicked.connect(self.on_tree_view_clicked)
 
         # Timer para atualizar informações do sistema
@@ -152,12 +193,31 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Aviso", "Por favor, selecione as pastas de origem e destino.")
             return
 
+        use_model = self.use_model_checkbox.isChecked()
+        structure_model = self.structure_model_input.text() if use_model else None
+
+        try:
+            if structure_model:
+                json.loads(structure_model)  # Validar JSON
+        except json.JSONDecodeError:
+            QMessageBox.warning(self, "Aviso", "O modelo de estrutura não é um JSON válido.")
+            return
+
         self.file_list.clear()
-        self.processing_thread = ProcessingThread(self.processor, self.source_dir, self.destination_dir)
+        self.processing_thread = ProcessingThread(self.processor, self.source_dir, self.destination_dir, use_model, structure_model)
         self.processing_thread.update_progress.connect(self.progress_bar.setValue)
         self.processing_thread.update_status.connect(self.status_label.setText)
         self.processing_thread.update_file_list.connect(self.update_file_list)
         self.processing_thread.start()
+
+        self.start_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+
+    def cancel_processing(self):
+        if hasattr(self, 'processing_thread'):
+            self.processing_thread.cancel()
+            self.status_label.setText("Cancelando processamento...")
+            self.cancel_button.setEnabled(False)
 
     def update_file_list(self, file_name, status):
         item = QListWidgetItem(f"{file_name} - {status}")
@@ -179,4 +239,3 @@ class MainWindow(QMainWindow):
         if os.path.isdir(path):
             self.source_dir = path
             self.source_button.setText(f"Origem: {os.path.basename(self.source_dir)}")
-
