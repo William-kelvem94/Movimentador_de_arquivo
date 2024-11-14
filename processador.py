@@ -16,18 +16,11 @@ class FileProcessor:
         logging.basicConfig(filename=self.log_file, level=logging.INFO,
                             format='%(asctime)s - %(levelname)s - %(message)s')
 
-    def process_files(self, source, destination, update_progress, update_status, update_file_list, use_model, structure_model, check_cancelled):
+    def process_files(self, source, destination, update_progress, update_status, update_file_list, structure_model, check_cancelled):
         files = [f for f in os.listdir(source) if os.path.isfile(os.path.join(source, f))]
         total_files = len(files)
 
-        if use_model and structure_model:
-            try:
-                structure = json.loads(structure_model)
-            except json.JSONDecodeError:
-                update_status("Erro: Modelo de estrutura inválido")
-                return
-        else:
-            structure = None
+        structure = self.read_structure(structure_model)
 
         for i, file in enumerate(tqdm(files, desc="Processando arquivos", unit="arquivo")):
             if check_cancelled():
@@ -37,12 +30,7 @@ class FileProcessor:
 
             source_path = os.path.join(source, file)
             try:
-                if structure:
-                    dest_folder = self.get_destination_folder(file, structure, destination)
-                else:
-                    file_type = self.get_file_type(source_path)
-                    dest_folder = os.path.join(destination, file_type)
-
+                dest_folder = self.get_destination_folder(file, structure, destination)
                 os.makedirs(dest_folder, exist_ok=True)
                 destination_path = os.path.join(dest_folder, file)
 
@@ -69,6 +57,18 @@ class FileProcessor:
 
         update_status("Processamento concluído")
         print(f"Log de processamento salvo em: {self.log_file}")
+
+    def read_structure(self, structure_model):
+        structure = {}
+        for root, dirs, files in os.walk(structure_model):
+            rel_path = os.path.relpath(root, structure_model)
+            if rel_path != '.':
+                structure[rel_path] = []
+                for file in files:
+                    _, ext = os.path.splitext(file)
+                    if ext and ext not in structure[rel_path]:
+                        structure[rel_path].append(ext.lower())
+        return structure
 
     def get_file_type(self, file_path):
         mime_type, _ = mimetypes.guess_type(file_path)
@@ -97,8 +97,9 @@ class FileProcessor:
             raise Exception(f"Erro ao processar imagem: {str(e)}")
 
     def get_destination_folder(self, file, structure, base_destination):
-        for folder, patterns in structure.items():
-            if any(file.lower().endswith(pat.lower()) for pat in patterns):
+        _, ext = os.path.splitext(file)
+        for folder, extensions in structure.items():
+            if ext.lower() in extensions:
                 return os.path.join(base_destination, folder)
         return os.path.join(base_destination, "Outros")
 
