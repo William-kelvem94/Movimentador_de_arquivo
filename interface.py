@@ -1,241 +1,356 @@
-
 import os
 import psutil
-import json
-from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
-                             QFileDialog, QProgressBar, QLabel, QTextEdit, QMessageBox, 
-                             QListWidget, QListWidgetItem, QStyle, QApplication, QScrollArea,
-                             QSplitter, QTreeView, QFileSystemModel, QCheckBox, QLineEdit)
-from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer, QSize, QDir
-from PyQt5.QtGui import QIcon, QFont, QColor, QPalette
+import traceback
+from PyQt5.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QFileDialog, QProgressBar, QLabel, QListWidget, QListWidgetItem,
+    QMessageBox, QFrame, QAction, QMenuBar
+)
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
+from PyQt5.QtGui import QIcon, QFont
 from processador import FileProcessor
 
 class ProcessingThread(QThread):
-    update_progress = pyqtSignal(int)
-    update_status = pyqtSignal(str)
-    update_file_list = pyqtSignal(str, str)
+    update_progress = pyqtSignal(int, str)  # (progress_percent, current_file)
+    update_file = pyqtSignal(str, str, str) # (file_name, status, details)
+    error_occurred = pyqtSignal(str)
+    finished = pyqtSignal()
 
-    def __init__(self, processor, source, destination, use_model, structure_model):
+    def __init__(self, processor, sources, model, destination):
         super().__init__()
         self.processor = processor
-        self.source = source
+        self.sources = sources
+        self.model = model
         self.destination = destination
-        self.use_model = use_model
-        self.structure_model = structure_model
-        self.is_cancelled = False
+        self._is_running = True
+        self._cancel_requested = False
 
     def run(self):
-        self.processor.process_files(self.source, self.destination, 
-                                     self.update_progress.emit, 
-                                     self.update_status.emit,
-                                     self.update_file_list.emit,
-                                     self.use_model,
-                                     self.structure_model,
-                                     self.check_cancelled)
+        try:
+            total_files = self.processor.calculate_total_files(self.sources)
+            if total_files == 0:
+                self.error_occurred.emit("Nenhum arquivo encontrado para processar!")
+                return
+
+            current_count = 0
+            for source in self.sources:
+                for root, _, files in os.walk(source):
+                    for file in files:
+                        if self._cancel_requested:
+                            self.update_file.emit(file, "Cancelado", "Processamento interrompido")
+                            return
+
+                        file_path = os.path.join(root, file)
+                        try:
+                            result = self.processor.process_file(
+                                file_path, 
+                                root,
+                                source,
+                                self.model,
+                                self.destination
+                            )
+                            
+                            current_count += 1
+                            progress = int((current_count / total_files) * 100)
+                            self.update_progress.emit(progress, file)
+                            
+                            if result['status'] == 'success':
+                                self.update_file.emit(file, "Sucesso", result['message'])
+                            else:
+                                self.update_file.emit(file, "Erro", result['message'])
+
+                        except Exception as e:
+                            error_msg = f"Erro crítico: {str(e)}"
+                            self.error_occurred.emit(error_msg)
+                            self.update_file.emit(file, "Erro", error_msg)
+
+            self.finished.emit()
+
+        except Exception as e:
+            self.error_occurred.emit(f"Erro no processamento: {traceback.format_exc()}")
+        finally:
+            self._is_running = False
 
     def cancel(self):
-        self.is_cancelled = True
-
-    def check_cancelled(self):
-        return self.is_cancelled
+        self._cancel_requested = True
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.processor = FileProcessor()
+        self.sources = []
+        self.current_theme = 'light'
         self.init_ui()
+        self.setup_themes()
 
     def init_ui(self):
-        self.setWindowTitle("Movimentador de Arquivos Inteligente")
-        self.setGeometry(100, 100, 1200, 800)
-        self.setStyleSheet('''
-            QMainWindow {
-                background-color: #f5f5f7;
-                color: #1d1d1f;
-            }
-            QPushButton {
-                background-color: #0071e3;
-                color: white;
-                border: none;
-                padding: 10px 20px;
-                text-align: center;
-                text-decoration: none;
-                font-size: 14px;
-                margin: 4px 2px;
-                border-radius: 8px;
-            }
-            QPushButton:hover {
-                background-color: #0077ed;
-            }
-            QProgressBar {
-                border: 2px solid #0071e3;
-                border-radius: 5px;
-                text-align: center;
-                color: #1d1d1f;
-            }
-            QProgressBar::chunk {
-                background-color: #0071e3;
-            }
-            QListWidget, QTreeView {
-                background-color: #ffffff;
-                color: #1d1d1f;
-                border: 1px solid #d2d2d7;
-                border-radius: 8px;
-            }
-            QLabel {
-                color: #1d1d1f;
-                font-size: 14px;
-            }
-            QCheckBox {
-                color: #1d1d1f;
-                font-size: 14px;
-            }
-            QLineEdit {
-                background-color: #ffffff;
-                color: #1d1d1f;
-                border: 1px solid #d2d2d7;
-                border-radius: 4px;
-                padding: 5px;
-            }
-        ''')
+        self.setWindowTitle("Organizador de Arquivos Pro")
+        self.setGeometry(100, 100, 1280, 800)
+        self.setup_menu()
+        self.setup_main_layout()
+        self.setup_theme()
+        self.setup_system_monitor()
 
-        main_layout = QVBoxLayout()
+    def setup_menu(self):
+        menu_bar = self.menuBar()
+        
+        # Menu Arquivo
+        file_menu = menu_bar.addMenu("Arquivo")
+        exit_action = QAction("Sair", self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
 
-        # Splitter para dividir a interface
-        splitter = QSplitter(Qt.Horizontal)
+        # Menu Tema
+        theme_menu = menu_bar.addMenu("Tema")
+        light_theme = QAction("Tema Claro", self)
+        dark_theme = QAction("Tema Escuro", self)
+        light_theme.triggered.connect(lambda: self.set_theme('light'))
+        dark_theme.triggered.connect(lambda: self.set_theme('dark'))
+        theme_menu.addAction(light_theme)
+        theme_menu.addAction(dark_theme)
 
-        # Painel esquerdo: Árvore de diretórios
-        self.file_system_model = QFileSystemModel()
-        self.file_system_model.setRootPath(QDir.rootPath())
-        self.tree_view = QTreeView()
-        self.tree_view.setModel(self.file_system_model)
-        self.tree_view.setRootIndex(self.file_system_model.index(QDir.homePath()))
-        self.tree_view.setAnimated(True)
-        self.tree_view.setIndentation(20)
-        self.tree_view.setSortingEnabled(True)
-        self.tree_view.setColumnWidth(0, 250)
-        splitter.addWidget(self.tree_view)
+    def setup_main_layout(self):
+        main_widget = QWidget()
+        main_layout = QHBoxLayout(main_widget)
 
-        # Painel direito: Controles e lista de arquivos
-        right_panel = QWidget()
+        # Painel Esquerdo (Controles)
+        left_panel = QFrame()
+        left_layout = QVBoxLayout(left_panel)
+        
+        self.btn_add_source = QPushButton("➕ Adicionar Origem", self)
+        self.btn_add_source.clicked.connect(self.add_source)
+        
+        self.source_list = QListWidget()
+        self.source_list.setMinimumWidth(300)
+        
+        self.btn_model = QPushButton("📁 Selecionar Modelo", self)
+        self.btn_model.clicked.connect(lambda: self.select_folder('model'))
+        
+        self.btn_dest = QPushButton("📂 Selecionar Destino", self)
+        self.btn_dest.clicked.connect(lambda: self.select_folder('destination'))
+        
+        left_layout.addWidget(self.btn_add_source)
+        left_layout.addWidget(QLabel("Pastas Origem:"))
+        left_layout.addWidget(self.source_list)
+        left_layout.addWidget(self.btn_model)
+        left_layout.addWidget(self.btn_dest)
+
+        # Painel Direito (Progresso e Resultados)
+        right_panel = QFrame()
         right_layout = QVBoxLayout(right_panel)
-
-        # Botões
-        button_layout = QHBoxLayout()
-        self.source_button = QPushButton("Selecionar Pasta de Origem", self)
-        self.destination_button = QPushButton("Selecionar Pasta de Destino", self)
-        self.start_button = QPushButton("Iniciar Processamento", self)
-        self.cancel_button = QPushButton("Cancelar Processamento", self)
-        self.cancel_button.setEnabled(False)
-        button_layout.addWidget(self.source_button)
-        button_layout.addWidget(self.destination_button)
-        button_layout.addWidget(self.start_button)
-        button_layout.addWidget(self.cancel_button)
-        right_layout.addLayout(button_layout)
-
-        # Checkbox para usar modelo de estrutura
-        self.use_model_checkbox = QCheckBox("Usar Modelo de Estrutura", self)
-        right_layout.addWidget(self.use_model_checkbox)
-
-        # Campo para inserir o modelo de estrutura
-        self.structure_model_input = QLineEdit(self)
-        self.structure_model_input.setPlaceholderText("Insira o modelo de estrutura (JSON)")
-        right_layout.addWidget(self.structure_model_input)
-
-        # Checkbox para continuar de onde parou
-        self.continue_checkbox = QCheckBox("Continuar de Onde Parou", self)
-        right_layout.addWidget(self.continue_checkbox)
-
-        # Barra de progresso e status
-        self.progress_bar = QProgressBar(self)
-        self.status_label = QLabel("Pronto para iniciar", self)
+        
+        self.progress_bar = QProgressBar()
+        self.lbl_status = QLabel("Status: Pronto")
+        
+        self.file_list = QListWidget()
+        self.file_list.setMinimumWidth(500)
+        
+        self.system_info = QLabel()
+        self.system_info.setAlignment(Qt.AlignRight)
+        
+        control_layout = QHBoxLayout()
+        self.btn_start = QPushButton("▶ Iniciar", self)
+        self.btn_stop = QPushButton("⏹ Parar", self)
+        self.btn_stop.setEnabled(False)
+        self.btn_start.clicked.connect(self.start_processing)
+        self.btn_stop.clicked.connect(self.stop_processing)
+        
+        control_layout.addWidget(self.btn_start)
+        control_layout.addWidget(self.btn_stop)
+        
         right_layout.addWidget(self.progress_bar)
-        right_layout.addWidget(self.status_label)
-
-        # Lista de arquivos processados
-        self.file_list = QListWidget(self)
+        right_layout.addWidget(self.lbl_status)
         right_layout.addWidget(QLabel("Arquivos Processados:"))
         right_layout.addWidget(self.file_list)
+        right_layout.addWidget(self.system_info)
+        right_layout.addLayout(control_layout)
 
-        # Informações do sistema
-        self.system_info_label = QLabel(self)
-        right_layout.addWidget(self.system_info_label)
+        main_layout.addWidget(left_panel)
+        main_layout.addWidget(right_panel)
+        self.setCentralWidget(main_widget)
 
-        splitter.addWidget(right_panel)
+    def setup_theme(self):
+        self.set_theme('light')
 
-        main_layout.addWidget(splitter)
-
-        central_widget = QWidget()
-        central_widget.setLayout(main_layout)
-        self.setCentralWidget(central_widget)
-
-        self.source_button.clicked.connect(self.select_source)
-        self.destination_button.clicked.connect(self.select_destination)
-        self.start_button.clicked.connect(self.start_processing)
-        self.cancel_button.clicked.connect(self.cancel_processing)
-        self.tree_view.clicked.connect(self.on_tree_view_clicked)
-
-        # Timer para atualizar informações do sistema
+    def setup_system_monitor(self):
         self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_system_info)
-        self.timer.start(1000)  # Atualiza a cada 1 segundo
+        self.timer.timeout.connect(self.update_system_stats)
+        self.timer.start(1000)
 
-    def select_source(self):
-        self.source_dir = QFileDialog.getExistingDirectory(self, "Selecionar Pasta de Origem")
-        self.source_button.setText(f"Origem: {os.path.basename(self.source_dir)}")
+    def set_theme(self, theme):
+        self.current_theme = theme
+        if theme == 'light':
+            self.apply_light_theme()
+        else:
+            self.apply_dark_theme()
 
-    def select_destination(self):
-        self.destination_dir = QFileDialog.getExistingDirectory(self, "Selecionar Pasta de Destino")
-        self.destination_button.setText(f"Destino: {os.path.basename(self.destination_dir)}")
+    def apply_light_theme(self):
+        style = """
+        QMainWindow {
+            background-color: #F5F5F5;
+            color: #333333;
+        }
+        QFrame {
+            background-color: #FFFFFF;
+            border-radius: 8px;
+            padding: 10px;
+        }
+        QPushButton {
+            background-color: #007AFF;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        QPushButton:hover {
+            background-color: #0063CC;
+        }
+        QListWidget {
+            background-color: #FFFFFF;
+            border: 1px solid #DDDDDD;
+            border-radius: 4px;
+        }
+        QProgressBar {
+            border: 1px solid #DDDDDD;
+            border-radius: 4px;
+            text-align: center;
+        }
+        QProgressBar::chunk {
+            background-color: #007AFF;
+        }
+        """
+        self.setStyleSheet(style)
+
+    def apply_dark_theme(self):
+        style = """
+        QMainWindow {
+            background-color: #1E1E1E;
+            color: #FFFFFF;
+        }
+        QFrame {
+            background-color: #2D2D2D;
+            border-radius: 8px;
+            padding: 10px;
+        }
+        QPushButton {
+            background-color: #0A84FF;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        QPushButton:hover {
+            background-color: #0063CC;
+        }
+        QListWidget {
+            background-color: #3A3A3A;
+            border: 1px solid #454545;
+            border-radius: 4px;
+        }
+        QProgressBar {
+            border: 1px solid #454545;
+            border-radius: 4px;
+            text-align: center;
+        }
+        QProgressBar::chunk {
+            background-color: #0A84FF;
+        }
+        """
+        self.setStyleSheet(style)
+
+    def add_source(self):
+        folder = QFileDialog.getExistingDirectory(self, "Selecionar Pasta de Origem")
+        if folder:
+            self.sources.append(folder)
+            self.source_list.addItem(f"📁 Pasta {len(self.sources)}: {os.path.basename(folder)}")
+
+    def select_folder(self, folder_type):
+        folder = QFileDialog.getExistingDirectory(self, f"Selecionar Pasta {folder_type.capitalize()}")
+        if folder:
+            setattr(self, folder_type, folder)
+            getattr(self, f'btn_{folder_type}').setText(f"✅ {folder_type.capitalize()}: {os.path.basename(folder)}")
+
+    def validate_inputs(self):
+        if not hasattr(self, 'model'):
+            QMessageBox.warning(self, "Aviso", "Selecione a pasta modelo!")
+            return False
+        if not hasattr(self, 'destination'):
+            QMessageBox.warning(self, "Aviso", "Selecione a pasta destino!")
+            return False
+        if not self.sources:
+            QMessageBox.warning(self, "Aviso", "Adicione pelo menos uma pasta de origem!")
+            return False
+        return True
 
     def start_processing(self):
-        if not hasattr(self, 'source_dir') or not hasattr(self, 'destination_dir'):
-            QMessageBox.warning(self, "Aviso", "Por favor, selecione as pastas de origem e destino.")
+        if not self.validate_inputs():
             return
-
-        use_model = self.use_model_checkbox.isChecked()
-        structure_model = self.structure_model_input.text() if use_model else None
 
         try:
-            if structure_model:
-                json.loads(structure_model)  # Validar JSON
-        except json.JSONDecodeError:
-            QMessageBox.warning(self, "Aviso", "O modelo de estrutura não é um JSON válido.")
-            return
+            self.thread = ProcessingThread(
+                self.processor,
+                self.sources,
+                self.model,
+                self.destination
+            )
 
-        self.file_list.clear()
-        self.processing_thread = ProcessingThread(self.processor, self.source_dir, self.destination_dir, use_model, structure_model)
-        self.processing_thread.update_progress.connect(self.progress_bar.setValue)
-        self.processing_thread.update_status.connect(self.status_label.setText)
-        self.processing_thread.update_file_list.connect(self.update_file_list)
-        self.processing_thread.start()
+            # Conexões de sinais
+            self.thread.update_progress.connect(self.update_progress)
+            self.thread.update_file.connect(self.update_file_status)
+            self.thread.error_occurred.connect(self.show_error)
+            self.thread.finished.connect(self.on_processing_finished)
 
-        self.start_button.setEnabled(False)
-        self.cancel_button.setEnabled(True)
+            self.btn_start.setEnabled(False)
+            self.btn_stop.setEnabled(True)
+            self.lbl_status.setText("Status: Processando...")
+            self.file_list.clear()
+            
+            self.thread.start()
 
-    def cancel_processing(self):
-        if hasattr(self, 'processing_thread'):
-            self.processing_thread.cancel()
-            self.status_label.setText("Cancelando processamento...")
-            self.cancel_button.setEnabled(False)
+        except Exception as e:
+            self.show_error(f"Erro ao iniciar processamento: {str(e)}")
 
-    def update_file_list(self, file_name, status):
-        item = QListWidgetItem(f"{file_name} - {status}")
+    def stop_processing(self):
+        if hasattr(self, 'thread') and self.thread.isRunning():
+            self.thread.cancel()
+            self.lbl_status.setText("Status: Cancelando...")
+            self.btn_stop.setEnabled(False)
+
+    def update_progress(self, value, current_file):
+        self.progress_bar.setValue(value)
+        self.lbl_status.setText(f"Processando: {current_file}")
+
+    def update_file_status(self, file_name, status, details):
+        item = QListWidgetItem()
         if status == "Sucesso":
-            item.setIcon(self.style().standardIcon(QStyle.SP_DialogApplyButton))
+            item.setIcon(QIcon.fromTheme("dialog-ok"))
+            item.setText(f"✓ {file_name}")
+            item.setToolTip(details)
         else:
-            item.setIcon(self.style().standardIcon(QStyle.SP_DialogCancelButton))
+            item.setIcon(QIcon.fromTheme("dialog-error"))
+            item.setText(f"✗ {file_name} - {status}")
+            item.setToolTip(details)
         self.file_list.addItem(item)
         self.file_list.scrollToBottom()
 
-    def update_system_info(self):
-        cpu = psutil.cpu_percent()
-        memory = psutil.virtual_memory().percent
-        disk = psutil.disk_usage('/').percent
-        self.system_info_label.setText(f"CPU: {cpu}% | Memória: {memory}% | Disco: {disk}%")
+    def show_error(self, message):
+        QMessageBox.critical(self, "Erro", message)
+        self.btn_start.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self.lbl_status.setText("Status: Erro ocorrido")
 
-    def on_tree_view_clicked(self, index):
-        path = self.file_system_model.filePath(index)
-        if os.path.isdir(path):
-            self.source_dir = path
-            self.source_button.setText(f"Origem: {os.path.basename(self.source_dir)}")
+    def on_processing_finished(self):
+        self.btn_start.setEnabled(True)
+        self.btn_stop.setEnabled(False)
+        self.lbl_status.setText("Status: Processamento concluído")
+        QMessageBox.information(self, "Concluído", "Processamento finalizado com sucesso!")
+
+    def update_system_stats(self):
+        cpu = psutil.cpu_percent()
+        mem = psutil.virtual_memory().percent
+        disk = psutil.disk_usage('/').percent
+        self.system_info.setText(
+            f"CPU: {cpu:.1f}% | Memória: {mem:.1f}% | Disco: {disk:.1f}%"
+        )
