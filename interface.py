@@ -84,6 +84,7 @@ class MainWindow(QMainWindow):
         self.setup_themes()
 
     def init_ui(self):
+        """Inicializa a interface do usuário."""
         self.setWindowTitle("Organizador de Arquivos Pro")
         self.setGeometry(100, 100, 1280, 800)
         self.setup_menu()
@@ -91,7 +92,12 @@ class MainWindow(QMainWindow):
         self.setup_theme()
         self.setup_system_monitor()
 
+    def setup_themes(self):
+        """Configura os temas da aplicação."""
+        self.set_theme('light')
+
     def setup_menu(self):
+        """Configura o menu da aplicação."""
         menu_bar = self.menuBar()
         
         # Menu Arquivo
@@ -110,6 +116,7 @@ class MainWindow(QMainWindow):
         theme_menu.addAction(dark_theme)
 
     def setup_main_layout(self):
+        """Configura o layout principal da aplicação."""
         main_widget = QWidget()
         main_layout = QHBoxLayout(main_widget)
 
@@ -129,11 +136,15 @@ class MainWindow(QMainWindow):
         self.btn_dest = QPushButton("📂 Selecionar Destino", self)
         self.btn_dest.clicked.connect(lambda: self.select_folder('destination'))
         
+        self.btn_remove_source = QPushButton("➖ Remover Origem", self)
+        self.btn_remove_source.clicked.connect(self.remove_source)
+        
         left_layout.addWidget(self.btn_add_source)
         left_layout.addWidget(QLabel("Pastas Origem:"))
         left_layout.addWidget(self.source_list)
         left_layout.addWidget(self.btn_model)
         left_layout.addWidget(self.btn_dest)
+        left_layout.addWidget(self.btn_remove_source)
 
         # Painel Direito (Progresso e Resultados)
         right_panel = QFrame()
@@ -170,14 +181,17 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(main_widget)
 
     def setup_theme(self):
+        """Configura o tema inicial da aplicação."""
         self.set_theme('light')
 
     def setup_system_monitor(self):
+        """Configura o monitoramento do sistema."""
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_system_stats)
         self.timer.start(1000)
 
     def set_theme(self, theme):
+        """Define o tema da aplicação."""
         self.current_theme = theme
         if theme == 'light':
             self.apply_light_theme()
@@ -185,6 +199,7 @@ class MainWindow(QMainWindow):
             self.apply_dark_theme()
 
     def apply_light_theme(self):
+        """Aplica o tema claro."""
         style = """
         QMainWindow {
             background-color: #F5F5F5;
@@ -223,6 +238,7 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(style)
 
     def apply_dark_theme(self):
+        """Aplica o tema escuro."""
         style = """
         QMainWindow {
             background-color: #1E1E1E;
@@ -261,18 +277,35 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(style)
 
     def add_source(self):
+        """Adiciona uma pasta de origem."""
         folder = QFileDialog.getExistingDirectory(self, "Selecionar Pasta de Origem")
         if folder:
             self.sources.append(folder)
             self.source_list.addItem(f"📁 Pasta {len(self.sources)}: {os.path.basename(folder)}")
 
+    def remove_source(self):
+        """Remove a pasta de origem selecionada."""
+        selected_items = self.source_list.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "Aviso", "Selecione uma pasta de origem para remover!")
+            return
+        for item in selected_items:
+            index = self.source_list.row(item)
+            self.source_list.takeItem(index)
+            del self.sources[index]
+
     def select_folder(self, folder_type):
+        """Seleciona uma pasta (modelo ou destino)."""
         folder = QFileDialog.getExistingDirectory(self, f"Selecionar Pasta {folder_type.capitalize()}")
         if folder:
             setattr(self, folder_type, folder)
-            getattr(self, f'btn_{folder_type}').setText(f"✅ {folder_type.capitalize()}: {os.path.basename(folder)}")
+            if folder_type == 'model':
+                self.btn_model.setText(f"✅ Modelo: {os.path.basename(folder)}")
+            elif folder_type == 'destination':
+                self.btn_dest.setText(f"✅ Destino: {os.path.basename(folder)}")
 
     def validate_inputs(self):
+        """Valida as entradas do usuário."""
         if not hasattr(self, 'model'):
             QMessageBox.warning(self, "Aviso", "Selecione a pasta modelo!")
             return False
@@ -285,6 +318,7 @@ class MainWindow(QMainWindow):
         return True
 
     def start_processing(self):
+        """Inicia o processamento dos arquivos."""
         if not self.validate_inputs():
             return
 
@@ -313,16 +347,19 @@ class MainWindow(QMainWindow):
             self.show_error(f"Erro ao iniciar processamento: {str(e)}")
 
     def stop_processing(self):
+        """Para o processamento dos arquivos."""
         if hasattr(self, 'thread') and self.thread.isRunning():
             self.thread.cancel()
             self.lbl_status.setText("Status: Cancelando...")
             self.btn_stop.setEnabled(False)
 
     def update_progress(self, value, current_file):
+        """Atualiza a barra de progresso."""
         self.progress_bar.setValue(value)
         self.lbl_status.setText(f"Processando: {current_file}")
 
     def update_file_status(self, file_name, status, details):
+        """Atualiza o status de um arquivo processado."""
         item = QListWidgetItem()
         if status == "Sucesso":
             item.setIcon(QIcon.fromTheme("dialog-ok"))
@@ -336,18 +373,21 @@ class MainWindow(QMainWindow):
         self.file_list.scrollToBottom()
 
     def show_error(self, message):
+        """Exibe uma mensagem de erro."""
         QMessageBox.critical(self, "Erro", message)
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.lbl_status.setText("Status: Erro ocorrido")
 
     def on_processing_finished(self):
+        """Ações a serem tomadas quando o processamento for concluído."""
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
         self.lbl_status.setText("Status: Processamento concluído")
         QMessageBox.information(self, "Concluído", "Processamento finalizado com sucesso!")
 
     def update_system_stats(self):
+        """Atualiza as estatísticas do sistema."""
         cpu = psutil.cpu_percent()
         mem = psutil.virtual_memory().percent
         disk = psutil.disk_usage('/').percent

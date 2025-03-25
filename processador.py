@@ -3,12 +3,15 @@ import shutil
 import logging
 import hashlib
 from datetime import datetime
+from typing import List, Dict, Any
 
 class FileProcessor:
     def __init__(self):
+        """Inicializa o processador de arquivos e configura o logger."""
         self.logger = self.setup_logger()
         
-    def setup_logger(self):
+    def setup_logger(self) -> logging.Logger:
+        """Configura o logger para registrar as atividades do processador de arquivos."""
         logger = logging.getLogger("FileProcessor")
         logger.setLevel(logging.INFO)
         
@@ -23,14 +26,16 @@ class FileProcessor:
         logger.addHandler(file_handler)
         return logger
 
-    def calculate_total_files(self, sources):
+    def calculate_total_files(self, sources: List[str]) -> int:
+        """Calcula o número total de arquivos nas pastas de origem."""
         total = 0
         for source in sources:
             for root, _, files in os.walk(source):
                 total += len(files)
         return total
 
-    def process_file(self, file_path, root, source, model, destination):
+    def process_file(self, file_path: str, root: str, source: str, model: str, destination: str) -> Dict[str, Any]:
+        """Processa um único arquivo, movendo-o para o destino e evitando duplicados."""
         try:
             file_name = os.path.basename(file_path)
             rel_path = os.path.relpath(root, source)
@@ -63,14 +68,20 @@ class FileProcessor:
                 'message': f"Erro: {str(e)}"
             }
 
-    def file_hash(self, file_path):
+    def file_hash(self, file_path: str) -> str:
+        """Gera o hash SHA-256 de um arquivo."""
         hash_sha256 = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                hash_sha256.update(chunk)
-        return hash_sha256.hexdigest()
+        try:
+            with open(file_path, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_sha256.update(chunk)
+            return hash_sha256.hexdigest()
+        except Exception as e:
+            self.logger.error(f"Erro ao calcular hash do arquivo {file_path}: {str(e)}")
+            return ""
 
-    def generate_unique_name(self, path):
+    def generate_unique_name(self, path: str) -> str:
+        """Gera um nome único para um arquivo, evitando duplicados."""
         base, ext = os.path.splitext(path)
         counter = 1
         while os.path.exists(path):

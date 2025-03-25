@@ -1,3 +1,3 @@
 @echo off
-call "C:\Users\willi\MovimentadorDeArquivos\venv\Scripts\activate.bat"
+call .venv\Scripts\activate
 python main.py
